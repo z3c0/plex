@@ -185,7 +185,7 @@ class TvShowMover:
     @staticmethod
     def set_file_operation(path):
         TvShowMover.operation = \
-            (os.rename if TvShowMover.tv_target_path == os.path.normpath(path)
+            (os.rename if TvShowMover.tgt_path == os.path.normpath(path)
              else sh.copyfile)
 
     @staticmethod
