@@ -40,23 +40,13 @@ def clean_movie_name(current_name: str) -> Optional[str]:
 
 def process_new_titles(video_files: list, subtitle_files: list) -> list:
 
-    print('=' * 80)
-    print(f'{"Processing New Names":*^80}')
-    print('=' * 80)
-
     name_changes = []
 
     for path, file, ext in video_files:
-        print(f'File: {file}')
-        print(f'Type: {ext}')
-
         new_name = clean_movie_name(file)
 
         if new_name == '.' + ext:
-            print('Skipped file', end='\n\n')
             continue
-
-        print(f'{file} --> {new_name}', end='\n\n')
 
         sub_name = None
         for sub_path, sub_file, sub_ext in subtitle_files:

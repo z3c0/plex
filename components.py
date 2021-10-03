@@ -1,5 +1,7 @@
 import os
 import re
+import datetime as dt
+import threading as thr
 import shutil as sh
 import configparser as cfg
 
@@ -8,6 +10,8 @@ config.read('plex.cfg')
 
 
 class Contants:
+    LOG_FILE = 'plex.log'
+
     PREFERRED_VIDEO_EXTENSIONS = {'mkv', 'mp4'}
 
     OTHER_VIDEO_EXTENSIONS = {'flv', 'f4p', 'ogv', 'asf', 'amv', 'mpg',
@@ -48,13 +52,103 @@ class Contants:
                          '4k', 'hd', 'x264', 'x265', '5.1'}
 
 
-class MovieMover:
-    src_path = config['movies']['src_path']
-    tgt_path = config['movies']['tgt_path']
+class LogComponent:
+    '''A thread-safe class for logging info to stdout or a specified file'''
+
+    def __init__(self, stdout=True, path=None, divider='='):
+        self._divider = divider
+
+        if not stdout and path is None:
+            print('[-]: a path is required when stdout is False')
+            stdout = True
+
+        if stdout and path is None:
+            # only write to stdout
+            def _print_wrapper(*values, **kwargs):
+                print(*values, **kwargs)
+
+        elif stdout and path is not None:
+            # write to log and stdout
+            def _print_wrapper(*values, **kwargs):
+                with open(path, 'a') as log_file:
+                    print(*values, **kwargs, file=log_file)
+                print(*values, **kwargs)
+
+        else:
+            # only write to log
+            def _print_wrapper(*values, **kwargs):
+                with open(path, 'a') as log_file:
+                    print(*values, **kwargs, file=log_file)
+
+        self._write_func = _print_wrapper
+
+        self._is_enabled = True
+        self._print_lock = thr.Lock()
+
+    def message(self, text):
+        lines = text.split('\n')
+
+        if self._is_enabled:
+            with self._print_lock:
+                for text in lines:
+                    self._write_func(f'[{dt.datetime.now()}]: {text}')
+
+    def disable(self):
+        self._is_enabled = False
+
+    def header(self, header_text: str):
+        header_text = header_text.upper().replace('_', ' ')
+
+        self.message(self._divider * 80)
+        self.message(f'{header_text.upper():*^80}')
+        self.message(self._divider * 80)
+
+    def divider(self):
+        self.message(self._divider * 80)
+
+
+class Output:
+    log = LogComponent(path=Contants.LOG_FILE)
+
+    log.header('loading file mover components')
+
+
+class FileMover:
+    src_path = None
+    tgt_path = None
+
+    @staticmethod
+    def list_files_on_source():
+        pass
+
+    @staticmethod
+    def list_files_on_target():
+        pass
+
+    @staticmethod
+    def move_files():
+        pass
+
+
+class MovieMover(FileMover):
+    src_path = config['movies']['src_path'].replace('\\', '/')
+    tgt_path = config['movies']['tgt_path'].replace('\\', '/')
 
     @staticmethod
     def list_files_on_source():
         movies_folder = os.walk(MovieMover.src_path)
+
+        all_files = list()
+
+        for root, _, files in movies_folder:
+            for file in files:
+                all_files.append((root, file))
+
+        return all_files
+
+    @staticmethod
+    def list_files_on_target():
+        movies_folder = os.walk(MovieMover.tgt_path)
 
         all_files = list()
 
@@ -70,64 +164,48 @@ class MovieMover:
 
         manifest = list()
 
-        print('=' * 80)
-        print(f'{"Processing Duplicates":*^80}')
-        print('=' * 80)
+        Output.log.header('processing duplicates')
 
         for path, old_name, new_name in name_changes:
-            old_location = path + '\\' + old_name
-            new_location = MovieMover.tgt_path + '\\' + new_name
+            old_location = path + '/' + old_name
+            new_location = MovieMover.tgt_path + '/' + new_name
 
             if os.path.isfile(new_location):
-                print(f'skipping {new_name}')
+                Output.log.message(f'[SKIP]\t{new_name}')
                 continue
 
             manifest.append((path, old_location, new_location))
 
-        print('=' * 80)
-        print(f'{"Deployment Manifest":*^80}')
-        print('=' * 80)
+        Output.log.header('deployment manifest')
 
         for idx, (path, _, new_name) in enumerate(manifest):
-            print(f'[{str(idx).zfill(2)}]: {new_name}')
+            Output.log.message(f'[{str(idx).zfill(2)}]\t{new_name}')
 
-        print('=' * 80)
-
-        while True:
-            confirm_deploy = input('Begin deployment? (y/n): ').lower().strip()
-
-            if confirm_deploy not in ('y', 'n'):
-                print(f'{confirm_deploy} is an invalid entry')
-                continue
-            break
-
-        if confirm_deploy == 'n':
-            return
+        Output.log.divider()
 
         for path, old_name, new_name in manifest:
-            print(f'\nOld: {old_name}\nNew: {new_name}')
+            Output.log.message(f'OLD:\t{old_name}')
+            Output.log.message(f'NEW:\t{new_name}')
             sh.copyfile(old_name, new_name)
 
-        print('=' * 80)
-        print(f'{"Deployment Complete":*^80}')
-        print('=' * 80)
+        Output.log.header('deployment complete')
 
 
-class TvShowMover:
+class TvShowMover(FileMover):
 
-    src_path = config['tv']['src_path']
-    tgt_path = config['tv']['tgt_path']
+    src_path = config['tv']['src_path'].replace('\\', '/')
+    tgt_path = config['tv']['tgt_path'].replace('\\', '/')
 
-    operation = sh.copyfile
+    move = sh.copyfile
 
     overwrite = False
 
     @staticmethod
-    def list_shows_on_source():
+    def list_files_on_source():
         return os.listdir(TvShowMover.src_path)
 
     @staticmethod
-    def list_shows_on_target():
+    def list_files_on_target():
         return os.listdir(TvShowMover.tgt_path)
 
     @staticmethod
@@ -184,46 +262,49 @@ class TvShowMover:
 
     @staticmethod
     def set_file_operation(path):
-        TvShowMover.operation = \
+        TvShowMover.move = \
             (os.rename if TvShowMover.tgt_path == os.path.normpath(path)
              else sh.copyfile)
 
     @staticmethod
-    def move_changes(changes):
+    def move_files(changes):
         errors = []
 
         for old_path, new_path in changes:
 
             if not TvShowMover.overwrite and os.path.isfile(new_path):
-                print(f'{old_path} -/-> {new_path} (already exists)')
+                Output.log.message(f'[SKIP]\t{new_path}')
                 continue
 
             try:
-                print(f'{old_path} ---> {new_path}')
+                Output.log.message(f'OLD:\t{old_path.split("/")[-1]}')
+                Output.log.message(f'NEW:\t{new_path}')
 
-                TvShowMover.operation(old_path, new_path)
+                TvShowMover.move(old_path, new_path)
             except Exception as e:
-                print(e)
+                Output.log.message(e)
                 errors.append((old_path, new_path))
 
         if len(errors) > 0:
-            print('reattempting errors')
+            Output.log.message('reattempting errors')
             for old_path, new_path in errors:
                 try:
-                    print(f'{old_path} --> {new_path}')
-                    TvShowMover.operation(old_path, new_path)
+                    Output.log.message(f'OLD:\t{old_path.split("/")[-1]}')
+                    Output.log.message(f'NEW:\t{new_path}')
+                    TvShowMover.move(old_path, new_path)
 
                 except Exception as e:
-                    print(e)
+                    Output.log.message(e)
                     continue
 
     @staticmethod
-    def move_odd_names(odd_names):
-        print('moving oddly-named files to s00')
+    def move_specials(odd_names):
+        Output.log.message('moving oddly-named files to s00')
         for old_path, new_path in odd_names:
             try:
-                print(f'{old_path} --> {new_path}')
+                Output.log.message(f'OLD:\t{old_path.split("/")[-1]}')
+                Output.log.message(f'NEW:\t{new_path}')
                 sh.copyfile(old_path, new_path)
             except Exception as e:
-                print(e)
+                Output.log.message(e)
                 continue

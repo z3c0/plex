@@ -6,3 +6,4 @@ sandbox/
 
 *.cfg
 *.code-workspace
+*.log
