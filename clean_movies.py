@@ -19,9 +19,12 @@ def clean_movie_name(current_name: str) -> Optional[str]:
 
     probably_the_name = current_name[:year.start()]
 
+    # replace spaces common symbols with underscores
     # "꞉" and ":" are not the same
     probably_the_name = re.sub(r'[.()_:꞉, ]', '_', probably_the_name)
-    probably_the_name = re.sub(r'[\']', '', probably_the_name)
+
+    # remove apostrophes and brackets
+    probably_the_name = re.sub(r'[\[\]\']', '', probably_the_name)
 
     for token in Contants.Movies.COMMON_TOKENS:
         if token in probably_the_name:
@@ -54,11 +57,11 @@ def process_new_titles(video_files: list, subtitle_files: list) -> list:
                 sub_name = sub_file + '.' + sub_ext
                 break
 
-        name_changes.append((path, file + '.' + ext, new_name + '.' + ext))
+        name_changes.append((f'{path}/{file}.{ext}', f'{new_name}.{ext}'))
 
         if sub_name:
-            new_sub_name = new_name + '.eng.' + sub_ext
-            name_changes.append((sub_path, sub_name, new_sub_name))
+            new_sub_name = f'{new_name}.eng.{sub_ext}'
+            name_changes.append((f'{sub_path}/{sub_name}', new_sub_name))
 
     return name_changes
 

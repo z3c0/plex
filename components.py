@@ -1,6 +1,7 @@
 import os
 import re
 import datetime as dt
+import queue as q
 import threading as thr
 import shutil as sh
 import configparser as cfg
@@ -11,6 +12,8 @@ config.read('plex.cfg')
 
 class Contants:
     LOG_FILE = 'plex.log'
+
+    THREAD_COUNT = 8
 
     PREFERRED_VIDEO_EXTENSIONS = {'mkv', 'mp4'}
 
@@ -55,8 +58,7 @@ class Contants:
 class LogComponent:
     '''A thread-safe class for logging info to stdout or a specified file'''
 
-    def __init__(self, stdout=True, path=None, divider='='):
-        self._divider = divider
+    def __init__(self, stdout=True, path=None, divider='=', pad='-', width=80):
 
         if not stdout and path is None:
             print('[-]: a path is required when stdout is False')
@@ -84,6 +86,9 @@ class LogComponent:
 
         self._is_enabled = True
         self._print_lock = thr.Lock()
+        self._divider = divider
+        self._pad = pad
+        self._width = width
 
     def message(self, text):
         lines = text.split('\n')
@@ -91,7 +96,16 @@ class LogComponent:
         if self._is_enabled:
             with self._print_lock:
                 for text in lines:
+                    text = (text[:self._width - 3] + '...'
+                            if len(text) > self._width
+                            else text)
                     self._write_func(f'[{dt.datetime.now()}]: {text}')
+
+    def submessage(self, text, header=''):
+        if header != '':
+            header = f'[{header}]'
+
+        self.message(f'|- {header} {text}')
 
     def disable(self):
         self._is_enabled = False
@@ -99,18 +113,18 @@ class LogComponent:
     def header(self, header_text: str):
         header_text = header_text.upper().replace('_', ' ')
 
-        self.message(self._divider * 80)
-        self.message(f'{header_text.upper():*^80}')
-        self.message(self._divider * 80)
+        header_text = header_text.center(self._width, self._pad)
+
+        self.message(self._divider * self._width)
+        self.message(header_text)
+        self.message(self._divider * self._width)
 
     def divider(self):
-        self.message(self._divider * 80)
+        self.message(self._divider * self._width)
 
 
 class Output:
     log = LogComponent(path=Contants.LOG_FILE)
-
-    log.header('loading file mover components')
 
 
 class FileMover:
@@ -133,6 +147,8 @@ class FileMover:
 class MovieMover(FileMover):
     src_path = config['movies']['src_path'].replace('\\', '/')
     tgt_path = config['movies']['tgt_path'].replace('\\', '/')
+
+    move = sh.copyfile
 
     @staticmethod
     def list_files_on_source():
@@ -159,34 +175,92 @@ class MovieMover(FileMover):
         return all_files
 
     @staticmethod
-    def move_files(name_changes: list) -> list:
-        name_changes = sorted(name_changes, key=lambda n: n[2])
+    def run_threads(queue, changes, func):
+        for _ in range(Contants.THREAD_COUNT):
+            thread = thr.Thread(target=func, daemon=True)
+            thread.start()
 
+        try:
+            for idx, (old_path, new_path) in enumerate(changes):
+                queue.put(((idx + 1) * -1, old_path, new_path))
+
+            queue.join()
+        except KeyboardInterrupt:
+            raise
+        except Exception as e:
+            Output.log.message(e)
+
+            MovieMover.remove_files((tgt for _, tgt in changes))
+
+        finally:
+            for _ in range(Contants.THREAD_COUNT):
+                queue.put((0, None, None))
+
+            while not queue.empty():
+                _ = queue.get_nowait()
+
+    @staticmethod
+    def process_manifest(changes: list) -> list:
         manifest = list()
 
         Output.log.header('processing duplicates')
 
-        for path, old_name, new_name in name_changes:
-            old_location = path + '/' + old_name
-            new_location = MovieMover.tgt_path + '/' + new_name
+        for old_path, new_name in changes:
+            new_path = MovieMover.tgt_path + '/' + new_name
 
-            if os.path.isfile(new_location):
-                Output.log.message(f'[SKIP]\t{new_name}')
+            if os.path.isfile(new_path):
+                Output.log.message(f'[SKIP] {new_name}')
                 continue
 
-            manifest.append((path, old_location, new_location))
+            manifest.append((old_path, new_path))
 
         Output.log.header('deployment manifest')
 
-        for idx, (path, _, new_name) in enumerate(manifest):
-            Output.log.message(f'[{str(idx).zfill(2)}]\t{new_name}')
+        for idx, (_, new_path) in enumerate(manifest):
+            Output.log.message(f'[{str(idx).zfill(2)}] {new_path}')
 
         Output.log.divider()
 
-        for path, old_name, new_name in manifest:
-            Output.log.message(f'OLD:\t{old_name}')
-            Output.log.message(f'NEW:\t{new_name}')
-            sh.copyfile(old_name, new_name)
+        return manifest
+
+    @staticmethod
+    def move_files(changes: list):
+        '''
+            changes is a list of 2-tuples
+            changes[n][0] contains the path of the file to be moved
+            changes[n][1] contains the desired name of the file
+        '''
+        changes = sorted(changes, key=lambda n: n[1])
+
+        manifest = MovieMover.process_manifest(changes)
+
+        queue = q.PriorityQueue(Contants.THREAD_COUNT)
+        errors = []
+
+        def move_files_thread():
+            while True:
+                priority_id, old_path, new_path = queue.get()
+
+                if priority_id == 0:
+                    queue.task_done()
+                    break
+
+                try:
+                    file_name = new_path.split("/")[-1]
+                    old_name = old_path.split("/")[-1]
+
+                    Output.log.message(f'[MOVE] {file_name} ({old_name})')
+                    MovieMover.move(old_path, new_path)
+                    Output.log.message(f'[DONE] {file_name}')
+
+                except Exception as e:
+                    Output.log.message(e.text)
+                    errors.append((old_path, new_path))
+                    raise
+                finally:
+                    queue.task_done()
+
+        TvShowMover.run_threads(queue, manifest, move_files_thread)
 
         Output.log.header('deployment complete')
 
@@ -267,44 +341,87 @@ class TvShowMover(FileMover):
              else sh.copyfile)
 
     @staticmethod
+    def remove_files(paths):
+        for path in paths:
+            try:
+                os.remove(path)
+            except FileNotFoundError:
+                continue
+
+    @staticmethod
+    def run_threads(queue, changes, func):
+        for _ in range(Contants.THREAD_COUNT):
+            thread = thr.Thread(target=func, daemon=True)
+            thread.start()
+
+        try:
+            for idx, (old_path, new_path) in enumerate(changes):
+                queue.put(((idx + 1) * -1, old_path, new_path))
+
+            queue.join()
+        except KeyboardInterrupt:
+            raise
+        except Exception as e:
+            Output.log.message(e)
+
+            TvShowMover.remove_files((tgt for _, tgt in changes))
+
+        finally:
+            for _ in range(Contants.THREAD_COUNT):
+                queue.put((0, None, None))
+
+            while not queue.empty():
+                _ = queue.get_nowait()
+
+    @staticmethod
     def move_files(changes):
         errors = []
 
-        for old_path, new_path in changes:
+        queue = q.PriorityQueue(len(changes))
 
-            if not TvShowMover.overwrite and os.path.isfile(new_path):
-                Output.log.message(f'[SKIP]\t{new_path}')
-                continue
+        def move_files_thread():
+            while True:
+                priority_id, old_path, new_path = queue.get()
 
-            try:
-                Output.log.message(f'OLD:\t{old_path.split("/")[-1]}')
-                Output.log.message(f'NEW:\t{new_path}')
+                if priority_id == 0:
+                    queue.task_done()
+                    break
 
-                TvShowMover.move(old_path, new_path)
-            except Exception as e:
-                Output.log.message(e)
-                errors.append((old_path, new_path))
+                if not TvShowMover.overwrite and os.path.isfile(new_path):
+                    Output.log.message(f'[SKIP] {new_path.split("/")[-1]}')
+                    queue.task_done()
+                    continue
 
-        if len(errors) > 0:
-            Output.log.message('reattempting errors')
-            for old_path, new_path in errors:
                 try:
-                    Output.log.message(f'OLD:\t{old_path.split("/")[-1]}')
-                    Output.log.message(f'NEW:\t{new_path}')
+                    file_name = new_path.split("/")[-1]
+                    old_name = old_path.split("/")[-1]
+
+                    Output.log.message(f'[MOVE] {file_name} ({old_name})')
                     TvShowMover.move(old_path, new_path)
+                    Output.log.message(f'[DONE] {file_name}')
 
                 except Exception as e:
                     Output.log.message(e)
-                    continue
+                    errors.append((old_path, new_path))
+
+                queue.task_done()
+
+        TvShowMover.run_threads(queue, changes, move_files_thread)
+
+        # clean-up half-processed files for re-attempting
+        TvShowMover.remove_files((tgt for _, tgt in errors))
 
     @staticmethod
     def move_specials(odd_names):
         Output.log.message('moving oddly-named files to s00')
         for old_path, new_path in odd_names:
             try:
-                Output.log.message(f'OLD:\t{old_path.split("/")[-1]}')
-                Output.log.message(f'NEW:\t{new_path}')
-                sh.copyfile(old_path, new_path)
+                file_name = new_path.split("/")[-1]
+                old_name = old_path.split("/")[-1]
+
+                Output.log.message(f'[MOVE] {file_name} ({old_name})')
+                TvShowMover.move(old_path, new_path)
+                Output.log.message(f'[DONE] {file_name}')
             except Exception as e:
                 Output.log.message(e)
                 continue

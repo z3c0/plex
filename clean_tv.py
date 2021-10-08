@@ -46,15 +46,12 @@ def clean_num_ext(episode_num_ext: str) -> str:
     return episode_num_ext
 
 
-def parse_episode_from_regex_match(episode_match: re.Match, season_folder):
+def parse_episode_match(episode_match: re.Match, season_folder: str) -> str:
     groups = episode_match.groupdict()
     episode_num = groups['episode'].lower().replace(' ', '')
     season_num = groups['season_num']
 
-    if season_num:
-        season = 's' + season_num.zfill(2)
-    else:
-        season = season_folder
+    season = 's' + season_num.zfill(2) if season_num else season_folder
 
     episode_num = groups['episode_num'].lower()
 
@@ -122,7 +119,7 @@ def clean_tv_show(tv_show_name: str, path=TvShowMover.src_path):
             odd_names.append((old_path, new_path))
             continue
 
-        episode = parse_episode_from_regex_match(episode_match, folder_season)
+        episode = parse_episode_match(episode_match, folder_season)
 
         new_path = (f'{TvShowMover.tgt_path}/{tv_show_name}/{season}/'
                     f'{episode}.{episode_ext}')
