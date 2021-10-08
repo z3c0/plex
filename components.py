@@ -1,147 +1,15 @@
 import os
 import re
-import datetime as dt
 import queue as q
 import threading as thr
 import shutil as sh
 import configparser as cfg
 
+from subcomponents import Output, FileMover, Constants, NameCleaner
+
+
 config = cfg.ConfigParser()
 config.read('plex.cfg')
-
-
-class Contants:
-    LOG_FILE = 'plex.log'
-
-    THREAD_COUNT = 8
-
-    PREFERRED_VIDEO_EXTENSIONS = {'mkv', 'mp4'}
-
-    OTHER_VIDEO_EXTENSIONS = {'flv', 'f4p', 'ogv', 'asf', 'amv', 'mpg',
-                              'f4b', 'yuv', 'nsv', 'svi', 'mov', 'f4v',
-                              'qt', '3gp', 'mxf', 'mp2', 'gif', 'roq',
-                              'drc', 'gifv', 'mpe', 'rm', 'wmv', 'webm',
-                              'mpeg', 'ogg', 'm2v', 'mng', 'm2ts', 'mts',
-                              'avi', 'rmvb', 'vob', 'm4v'}
-
-    SUBTITLE_EXTENSIONS = {'srt', 'idx', 'sub'}
-
-    class Tv:
-        EPISODE_REGEX = (r'(?P<episode>'  # start episode group
-
-                         # eg s01 or S01 or 1
-                         r'(?P<season>[sS]?(?P<season_num>\d+))?'
-
-                         # episode number: e01 or E01 or x01
-                         # optionally, preceding "_", "-", or " "
-                         r'[\-_ ]?[xeE](?P<episode_num>\d+)'
-
-                         # detects multi-episode file
-                         # (-e02, -E02, ,-x02, -02)
-                         r'(?P<episode_num_ext>-?[xeE]?\d+)?'
-
-                         # close episode group
-                         r')'
-
-                         # detects multi-part episode
-                         r'(?P<part_num>-(pt|part)\d)?')
-
-    class Movies:
-        YEAR_REGEX_PATTERN = r'^.+__(?P<year>(19|20)\d{2}).+$'
-        TITLE_REGEX_PATTERN = r'^(?P<title>[a-zA-Z0-9 \'\-!_&]+).+$'
-        VALID_NAME_PATTERN = r'[^a-z0-9\._]'
-
-        COMMON_TOKENS = {'web', 'bluray', 'dvdrip', '2160p', '1080p', '720p',
-                         '4k', 'hd', 'x264', 'x265', '5.1'}
-
-
-class LogComponent:
-    '''A thread-safe class for logging info to stdout or a specified file'''
-
-    def __init__(self, stdout=True, path=None, divider='=', pad='-', width=80):
-
-        if not stdout and path is None:
-            print('[-]: a path is required when stdout is False')
-            stdout = True
-
-        if stdout and path is None:
-            # only write to stdout
-            def _print_wrapper(*values, **kwargs):
-                print(*values, **kwargs)
-
-        elif stdout and path is not None:
-            # write to log and stdout
-            def _print_wrapper(*values, **kwargs):
-                with open(path, 'a') as log_file:
-                    print(*values, **kwargs, file=log_file)
-                print(*values, **kwargs)
-
-        else:
-            # only write to log
-            def _print_wrapper(*values, **kwargs):
-                with open(path, 'a') as log_file:
-                    print(*values, **kwargs, file=log_file)
-
-        self._write_func = _print_wrapper
-
-        self._is_enabled = True
-        self._print_lock = thr.Lock()
-        self._divider = divider
-        self._pad = pad
-        self._width = width
-
-    def message(self, text):
-        lines = text.split('\n')
-
-        if self._is_enabled:
-            with self._print_lock:
-                for text in lines:
-                    text = (text[:self._width - 3] + '...'
-                            if len(text) > self._width
-                            else text)
-                    self._write_func(f'[{dt.datetime.now()}]: {text}')
-
-    def submessage(self, text, header=''):
-        if header != '':
-            header = f'[{header}]'
-
-        self.message(f'|- {header} {text}')
-
-    def disable(self):
-        self._is_enabled = False
-
-    def header(self, header_text: str):
-        header_text = header_text.upper().replace('_', ' ')
-
-        header_text = header_text.center(self._width, self._pad)
-
-        self.message(self._divider * self._width)
-        self.message(header_text)
-        self.message(self._divider * self._width)
-
-    def divider(self):
-        self.message(self._divider * self._width)
-
-
-class Output:
-    log = LogComponent(path=Contants.LOG_FILE)
-
-
-class FileMover:
-    src_path = None
-    tgt_path = None
-
-    @staticmethod
-    def list_files_on_source():
-        pass
-
-    @staticmethod
-    def list_files_on_target():
-        pass
-
-    @staticmethod
-    def move_files():
-        pass
 
 
 class MovieMover(FileMover):
@@ -176,7 +44,7 @@ class MovieMover(FileMover):
 
     @staticmethod
     def run_threads(queue, changes, func):
-        for _ in range(Contants.THREAD_COUNT):
+        for _ in range(Constants.THREAD_COUNT):
             thread = thr.Thread(target=func, daemon=True)
             thread.start()
 
@@ -193,7 +61,7 @@ class MovieMover(FileMover):
             MovieMover.remove_files((tgt for _, tgt in changes))
 
         finally:
-            for _ in range(Contants.THREAD_COUNT):
+            for _ in range(Constants.THREAD_COUNT):
                 queue.put((0, None, None))
 
             while not queue.empty():
@@ -214,12 +82,13 @@ class MovieMover(FileMover):
 
             manifest.append((old_path, new_path))
 
-        Output.log.header('deployment manifest')
-
-        for idx, (_, new_path) in enumerate(manifest):
-            Output.log.message(f'[{str(idx).zfill(2)}] {new_path}')
-
-        Output.log.divider()
+        if len(manifest):
+            Output.log.header('deployment manifest')
+            for idx, (_, new_path) in enumerate(manifest):
+                Output.log.message(f'[{str(idx).zfill(2)}] {new_path}')
+                Output.log.divider()
+        else:
+            Output.log.header('no changes')
 
         return manifest
 
@@ -234,7 +103,7 @@ class MovieMover(FileMover):
 
         manifest = MovieMover.process_manifest(changes)
 
-        queue = q.PriorityQueue(Contants.THREAD_COUNT)
+        queue = q.PriorityQueue(Constants.THREAD_COUNT)
         errors = []
 
         def move_files_thread():
@@ -254,18 +123,82 @@ class MovieMover(FileMover):
                     Output.log.message(f'[DONE] {file_name}')
 
                 except Exception as e:
-                    Output.log.message(e.text)
+                    Output.log.message(str(e))
                     errors.append((old_path, new_path))
                     raise
                 finally:
                     queue.task_done()
 
-        TvShowMover.run_threads(queue, manifest, move_files_thread)
+        MovieMover.run_threads(queue, manifest, move_files_thread)
 
         Output.log.header('deployment complete')
 
+    @staticmethod
+    def search(all_files: list, preferred_only=False) -> list:
+        video_files = list()
+        subtitle_files = list()
 
-class TvShowMover(FileMover):
+        extensions = Constants.PREFERRED_VIDEO_EXTENSIONS
+        other_extensions = Constants.OTHER_VIDEO_EXTENSIONS
+
+        all_extensions = (extensions.union(other_extensions)
+                          if not preferred_only
+                          else extensions)
+
+        extension = None
+        extension_match = None
+
+        for path, file in all_files:
+            file = file.lower()
+            extension_match = re.search(r'^(.+)\.([a-z0-9]{2,4})$', file)
+            if not extension_match:
+                continue
+
+            name = extension_match.group(1)
+            extension = extension_match.group(2)
+
+            if extension in Constants.SUBTITLE_EXTENSIONS:
+                subtitle_files.append((path, name, extension))
+
+            if extension not in all_extensions:
+                continue
+
+            if file[0] == '.':
+                continue
+
+            if 'sample' in file:
+                continue
+
+            video_files.append((path, name, extension))
+
+        return video_files, subtitle_files
+
+    @staticmethod
+    def process_new_titles(video_files: list, subtitle_files: list) -> list:
+        name_changes = []
+
+        for path, file, ext in video_files:
+            new_name = NameCleaner.movie_name(file)
+
+            if new_name == '.' + ext:
+                continue
+
+            sub_name = None
+            for sub_path, sub_file, sub_ext in subtitle_files:
+                if sub_file == file:
+                    sub_name = sub_file + '.' + sub_ext
+                    break
+
+            name_changes.append((f'{path}/{file}.{ext}', f'{new_name}.{ext}'))
+
+            if sub_name:
+                new_sub_name = f'{new_name}.eng.{sub_ext}'
+                name_changes.append((f'{sub_path}/{sub_name}', new_sub_name))
+
+        return name_changes
+
+
+class TvMover(FileMover):
 
     src_path = config['tv']['src_path'].replace('\\', '/')
     tgt_path = config['tv']['tgt_path'].replace('\\', '/')
@@ -276,15 +209,16 @@ class TvShowMover(FileMover):
 
     @staticmethod
     def list_files_on_source():
-        return os.listdir(TvShowMover.src_path)
+        return os.listdir(TvMover.src_path)
 
     @staticmethod
     def list_files_on_target():
-        return os.listdir(TvShowMover.tgt_path)
+        return os.listdir(TvMover.tgt_path)
 
     @staticmethod
-    def get_tv_show_files(tv_show_name: str):
-        tv_show_folder = os.walk(TvShowMover.src_path + '/' + tv_show_name)
+    def get_tv_show_files(tv_show_folder_name: str):
+        tv_show_folder_name = f'{TvMover.src_path}/{tv_show_folder_name}'
+        tv_show_folder = os.walk(tv_show_folder_name)
 
         tv_show = []
         for root, _, files in tv_show_folder:
@@ -311,18 +245,18 @@ class TvShowMover(FileMover):
 
     @staticmethod
     def allocate_space_for_show(tv_show_name: str):
-        if not os.path.exists(TvShowMover.tgt_path + '/' + tv_show_name):
-            os.makedirs(TvShowMover.tgt_path + '/' + tv_show_name)
+        if not os.path.exists(TvMover.tgt_path + '/' + tv_show_name):
+            os.makedirs(TvMover.tgt_path + '/' + tv_show_name)
 
     @staticmethod
     def allocate_space_for_season(tv_show_name: str, season: str):
-        season_path = f'{TvShowMover.tgt_path}/{tv_show_name}/{season}'
+        season_path = f'{TvMover.tgt_path}/{tv_show_name}/{season}'
         if not os.path.exists(season_path):
             os.makedirs(season_path)
 
     @staticmethod
     def create_specials_folder(tv_show_name: str):
-        season_zero_path = f'{TvShowMover.tgt_path}/{tv_show_name}/s00'
+        season_zero_path = f'{TvMover.tgt_path}/{tv_show_name}/s00'
         if not os.path.exists(season_zero_path):
             os.makedirs(season_zero_path)
 
@@ -332,12 +266,12 @@ class TvShowMover(FileMover):
 
     @staticmethod
     def set_overwrite(overwrite):
-        TvShowMover.overwrite = overwrite
+        TvMover.overwrite = overwrite
 
     @staticmethod
     def set_file_operation(path):
-        TvShowMover.move = \
-            (os.rename if TvShowMover.tgt_path == os.path.normpath(path)
+        TvMover.move = \
+            (os.rename if TvMover.tgt_path == os.path.normpath(path)
              else sh.copyfile)
 
     @staticmethod
@@ -350,7 +284,7 @@ class TvShowMover(FileMover):
 
     @staticmethod
     def run_threads(queue, changes, func):
-        for _ in range(Contants.THREAD_COUNT):
+        for _ in range(Constants.THREAD_COUNT):
             thread = thr.Thread(target=func, daemon=True)
             thread.start()
 
@@ -362,12 +296,11 @@ class TvShowMover(FileMover):
         except KeyboardInterrupt:
             raise
         except Exception as e:
-            Output.log.message(e)
-
-            TvShowMover.remove_files((tgt for _, tgt in changes))
+            Output.log.message(str(e))
+            TvMover.remove_files((tgt for _, tgt in changes))
 
         finally:
-            for _ in range(Contants.THREAD_COUNT):
+            for _ in range(Constants.THREAD_COUNT):
                 queue.put((0, None, None))
 
             while not queue.empty():
@@ -387,7 +320,7 @@ class TvShowMover(FileMover):
                     queue.task_done()
                     break
 
-                if not TvShowMover.overwrite and os.path.isfile(new_path):
+                if not TvMover.overwrite and os.path.isfile(new_path):
                     Output.log.message(f'[SKIP] {new_path.split("/")[-1]}')
                     queue.task_done()
                     continue
@@ -397,19 +330,19 @@ class TvShowMover(FileMover):
                     old_name = old_path.split("/")[-1]
 
                     Output.log.message(f'[MOVE] {file_name} ({old_name})')
-                    TvShowMover.move(old_path, new_path)
+                    TvMover.move(old_path, new_path)
                     Output.log.message(f'[DONE] {file_name}')
 
                 except Exception as e:
-                    Output.log.message(e)
+                    Output.log.message(str(e))
                     errors.append((old_path, new_path))
 
                 queue.task_done()
 
-        TvShowMover.run_threads(queue, changes, move_files_thread)
+        TvMover.run_threads(queue, changes, move_files_thread)
 
         # clean-up half-processed files for re-attempting
-        TvShowMover.remove_files((tgt for _, tgt in errors))
+        TvMover.remove_files((tgt for _, tgt in errors))
 
     @staticmethod
     def move_specials(odd_names):
@@ -420,8 +353,73 @@ class TvShowMover(FileMover):
                 old_name = old_path.split("/")[-1]
 
                 Output.log.message(f'[MOVE] {file_name} ({old_name})')
-                TvShowMover.move(old_path, new_path)
+                TvMover.move(old_path, new_path)
                 Output.log.message(f'[DONE] {file_name}')
             except Exception as e:
-                Output.log.message(e)
+                Output.log.message(str(e))
                 continue
+
+    @staticmethod
+    def clean_tv_show(tv_show_name: str, path=None):
+        path = path if path is not None else TvMover.src_path
+
+        tv_show_name = NameCleaner.tv_show_name(tv_show_name)
+
+        TvMover.set_file_operation(path)
+        TvMover.allocate_space_for_show(tv_show_name)
+
+        tv_show = TvMover.get_tv_show_files(tv_show_name)
+
+        changes = []
+        odd_names = []
+
+        if len(tv_show):
+            Output.log.header(tv_show_name)
+
+        for root, season, episode in tv_show:
+            old_episode_name = episode
+
+            # skip hidden files
+            if episode[0] == '.' or not re.match(r's\d+', season):
+                continue
+
+            season_num = NameCleaner.get_season_num_from_episode(episode)
+            season = (season_num if season_num and season_num != season
+                      else season)
+
+            TvMover.allocate_space_for_season(tv_show_name, season)
+
+            episode_match = re.search(Constants.Tv.EPISODE_REGEX, episode)
+            episode_ext_match = re.search(r'^.+\.([a-z0-9]{2,4})$', episode)
+
+            if not episode_ext_match:
+                continue
+
+            episode_ext = episode_ext_match.group(1).lower()
+
+            valid_extensions = (Constants.PREFERRED_VIDEO_EXTENSIONS
+                                .union(Constants.OTHER_VIDEO_EXTENSIONS)
+                                .union(Constants.SUBTITLE_EXTENSIONS))
+
+            if episode_ext not in valid_extensions:
+                continue
+
+            if not episode_match:
+                new_name = NameCleaner.name_special_file(episode)
+
+                old_path = root + '/' + episode
+                new_path = f'{TvMover.tgt_path}/{tv_show_name}/s00/{new_name}'
+
+                odd_names.append((old_path, new_path))
+                continue
+
+            episode = NameCleaner.parse_episode_match(episode_match, season)
+
+            new_path = (f'{TvMover.tgt_path}/{tv_show_name}/{season}/'
+                        f'{episode}.{episode_ext}')
+            old_path = root + '/' + old_episode_name
+
+            if not TvMover.paths_are_equal(old_path, new_path):
+                changes.append((old_path, new_path))
+
+        return changes, odd_names
