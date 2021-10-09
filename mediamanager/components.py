@@ -86,7 +86,7 @@ class MovieMover(FileMover):
             Output.log.header('deployment manifest')
             for idx, (_, new_path) in enumerate(manifest):
                 Output.log.message(f'[{str(idx).zfill(2)}] {new_path}')
-                Output.log.divider()
+            Output.log.divider()
         else:
             Output.log.header('no changes')
 

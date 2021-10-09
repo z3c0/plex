@@ -1,5 +1,5 @@
 
-from components import TvMover
+from mediamanager import TvMover
 
 
 def main():
