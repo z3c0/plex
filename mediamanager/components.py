@@ -5,8 +5,8 @@ import threading as thr
 import shutil as sh
 import configparser as cfg
 
-from subcomponents import Output, FileMover, Constants, NameCleaner
-
+from mediamanager.subcomponents import (Output, FileMover, 
+                                        Constants, NameCleaner)
 
 config = cfg.ConfigParser()
 config.read('plex.cfg')
