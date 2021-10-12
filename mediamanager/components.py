@@ -5,7 +5,7 @@ import threading as thr
 import shutil as sh
 import configparser as cfg
 
-from mediamanager.subcomponents import (Output, FileMover, 
+from mediamanager.subcomponents import (Output, FileMover,
                                         Constants, NameCleaner)
 
 config = cfg.ConfigParser()
