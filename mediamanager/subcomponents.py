@@ -34,7 +34,7 @@ class Constants:
 
                          # detects multi-episode file
                          # (-e02, -E02, ,-x02, -02)
-                         r'(?P<episode_num_ext>-?[xeE]?\d+)?'
+                         r'-?[xeE]?(?P<episode_num_ext>\d+)?'
 
                          # close episode group
                          r')'
@@ -144,7 +144,7 @@ class NameCleaner:
 
     @staticmethod
     def movie_name(current_name: str) -> Optional[str]:
-        year = re.search(r'(19|20)[0-9]{2}', current_name)
+        year = list(re.finditer(r'(19|20)[0-9]{2}', current_name))[-1]
 
         probably_the_name = current_name[:year.start()]
 
