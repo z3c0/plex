@@ -21,11 +21,14 @@ def move_tv_files():
         changes, specials = TvMover.clean_tv_show(tv_show)
 
         if len(changes) > 0:
-            TvMover.move_files(changes)
+            TvMover.move_files_to_stage(changes)
 
         if len(specials) > 0:
             TvMover.create_specials_folder(tv_show)
             TvMover.move_specials(specials)
+
+        TvMover.move_files_to_target()
+        TvMover.clear_stage(tv_show)
 
 
 if __name__ == '__main__':

@@ -14,6 +14,7 @@ config.read('plex.cfg')
 
 class MovieMover(FileMover):
     src_path = config['movies']['src_path'].replace('\\', '/')
+    stg_path = config['movies']['stg_path'].replace('\\', '/')
     tgt_path = config['movies']['tgt_path'].replace('\\', '/')
 
     move = sh.copyfile
@@ -74,9 +75,11 @@ class MovieMover(FileMover):
         Output.log.header('processing duplicates')
 
         for old_path, new_name in changes:
-            new_path = MovieMover.tgt_path + '/' + new_name
+            new_path = MovieMover.stg_path + '/' + new_name
+            target_path = MovieMover.tgt_path + '/' + new_name
 
-            if os.path.isfile(new_path):
+            # if file exists on target or was already staged
+            if os.path.isfile(target_path) or os.path.isfile(new_path):
                 Output.log.message(f'[SKIP] {new_name}')
                 continue
 
@@ -91,6 +94,19 @@ class MovieMover(FileMover):
             Output.log.header('no changes')
 
         return manifest
+
+    @staticmethod
+    def move_files_to_target():
+        for root, _, files in os.walk(MovieMover.stg_path):
+            root = root.replace('\\', '/')
+            for file in files:
+                current_path = root + '/' + file
+                stg_path_with_tgt = (MovieMover.stg_path, MovieMover.tgt_path)
+                new_path = current_path.replace(*stg_path_with_tgt)
+                os.rename(current_path, new_path)
+
+        sh.rmtree(MovieMover.stg_path)
+        os.mkdir(MovieMover.stg_path)
 
     @staticmethod
     def move_files(changes: list):
@@ -201,6 +217,7 @@ class MovieMover(FileMover):
 class TvMover(FileMover):
 
     src_path = config['tv']['src_path'].replace('\\', '/')
+    stg_path = config['tv']['stg_path'].replace('\\', '/')
     tgt_path = config['tv']['tgt_path'].replace('\\', '/')
 
     move = sh.copyfile
@@ -245,20 +262,28 @@ class TvMover(FileMover):
 
     @staticmethod
     def allocate_space_for_show(tv_show_name: str):
-        if not os.path.exists(TvMover.tgt_path + '/' + tv_show_name):
-            os.makedirs(TvMover.tgt_path + '/' + tv_show_name)
+        try:
+            os.makedirs(f'{TvMover.stg_path}/{tv_show_name}')
+        except FileExistsError:
+            pass
 
     @staticmethod
     def allocate_space_for_season(tv_show_name: str, season: str):
-        season_path = f'{TvMover.tgt_path}/{tv_show_name}/{season}'
-        if not os.path.exists(season_path):
-            os.makedirs(season_path)
+        try:
+            os.makedirs(f'{TvMover.stg_path}/{tv_show_name}/{season}')
+        except FileExistsError:
+            pass
 
     @staticmethod
     def create_specials_folder(tv_show_name: str):
-        season_zero_path = f'{TvMover.tgt_path}/{tv_show_name}/s00'
-        if not os.path.exists(season_zero_path):
-            os.makedirs(season_zero_path)
+        try:
+            os.makedirs(f'{TvMover.stg_path}/{tv_show_name}/s00')
+        except FileExistsError:
+            pass
+
+    @staticmethod
+    def clear_stage():
+        sh.rmtree(TvMover.stg_path)
 
     @staticmethod
     def paths_are_equal(old_path: str, new_path: str) -> bool:
@@ -307,7 +332,17 @@ class TvMover(FileMover):
                 _ = queue.get_nowait()
 
     @staticmethod
-    def move_files(changes):
+    def move_files_to_target():
+        for root, _, files in os.walk(TvMover.stg_path):
+            root = root.replace('\\', '/')
+            for file in files:
+                current_path = root + '/' + file
+                stg_path_with_tgt_path = (TvMover.stg_path, TvMover.tgt_path)
+                new_path = current_path.replace(*stg_path_with_tgt_path)
+                os.rename(current_path, new_path)
+
+    @staticmethod
+    def move_files_to_stage(changes):
         errors = []
 
         queue = q.PriorityQueue(len(changes))
@@ -320,7 +355,10 @@ class TvMover(FileMover):
                     queue.task_done()
                     break
 
-                if not TvMover.overwrite and os.path.isfile(new_path):
+                target_path = \
+                    new_path.replace(TvMover.stg_path, TvMover.tgt_path)
+
+                if not TvMover.overwrite and os.path.isfile(target_path):
                     Output.log.message(f'[SKIP] {new_path.split("/")[-1]}')
                     queue.task_done()
                     continue
@@ -408,14 +446,14 @@ class TvMover(FileMover):
                 new_name = NameCleaner.name_special_file(episode)
 
                 old_path = root + '/' + episode
-                new_path = f'{TvMover.tgt_path}/{tv_show_name}/s00/{new_name}'
+                new_path = f'{TvMover.stg_path}/{tv_show_name}/s00/{new_name}'
 
                 odd_names.append((old_path, new_path))
                 continue
 
             episode = NameCleaner.parse_episode_match(episode_match, season)
 
-            new_path = (f'{TvMover.tgt_path}/{tv_show_name}/{season}/'
+            new_path = (f'{TvMover.stg_path}/{tv_show_name}/{season}/'
                         f'{episode}.{episode_ext}')
             old_path = root + '/' + old_episode_name
 
