@@ -282,8 +282,8 @@ class TvMover(FileMover):
             pass
 
     @staticmethod
-    def clear_stage():
-        sh.rmtree(TvMover.stg_path)
+    def clear_stage(tv_show: str):
+        sh.rmtree(TvMover.stg_path + '/' + tv_show)
 
     @staticmethod
     def paths_are_equal(old_path: str, new_path: str) -> bool:
