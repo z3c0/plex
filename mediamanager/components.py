@@ -138,6 +138,9 @@ class MovieMover(FileMover):
                     MovieMover.move(old_path, new_path)
                     Output.log.message(f'[DONE] {file_name}')
 
+                except KeyboardInterrupt:
+                    raise
+
                 except Exception as e:
                     Output.log.message(str(e))
                     errors.append((old_path, new_path))
@@ -267,6 +270,11 @@ class TvMover(FileMover):
         except FileExistsError:
             pass
 
+        try:
+            os.makedirs(f'{TvMover.tgt_path}/{tv_show_name}')
+        except FileExistsError:
+            pass
+
     @staticmethod
     def allocate_space_for_season(tv_show_name: str, season: str):
         try:
@@ -274,10 +282,20 @@ class TvMover(FileMover):
         except FileExistsError:
             pass
 
+        try:
+            os.makedirs(f'{TvMover.tgt_path}/{tv_show_name}/{season}')
+        except FileExistsError:
+            pass
+
     @staticmethod
     def create_specials_folder(tv_show_name: str):
         try:
             os.makedirs(f'{TvMover.stg_path}/{tv_show_name}/s00')
+        except FileExistsError:
+            pass
+
+        try:
+            os.makedirs(f'{TvMover.tgt_path}/{tv_show_name}/s00')
         except FileExistsError:
             pass
 
@@ -325,9 +343,11 @@ class TvMover(FileMover):
             TvMover.remove_files((tgt for _, tgt in changes))
 
         finally:
+            Output.log.message('sending close signal to threads')
             for _ in range(Constants.THREAD_COUNT):
                 queue.put((0, None, None))
 
+            Output.log.message('waiting for threads to close')
             while not queue.empty():
                 _ = queue.get_nowait()
 
@@ -370,12 +390,15 @@ class TvMover(FileMover):
                     Output.log.message(f'[MOVE] {file_name} ({old_name})')
                     TvMover.move(old_path, new_path)
                     Output.log.message(f'[DONE] {file_name}')
+                
+                except KeyboardInterrupt:
+                    raise
 
                 except Exception as e:
                     Output.log.message(str(e))
                     errors.append((old_path, new_path))
-
-                queue.task_done()
+                finally:
+                    queue.task_done()
 
         TvMover.run_threads(queue, changes, move_files_thread)
 
@@ -393,6 +416,9 @@ class TvMover(FileMover):
                 Output.log.message(f'[MOVE] {file_name} ({old_name})')
                 TvMover.move(old_path, new_path)
                 Output.log.message(f'[DONE] {file_name}')
+
+            except KeyboardInterrupt:
+                raise
             except Exception as e:
                 Output.log.message(str(e))
                 continue
