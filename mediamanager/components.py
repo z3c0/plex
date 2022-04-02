@@ -228,11 +228,11 @@ class TvMover(FileMover):
     overwrite = False
 
     @staticmethod
-    def list_files_on_source():
+    def list_tv_shows_on_source():
         return os.listdir(TvMover.src_path)
 
     @staticmethod
-    def list_files_on_target():
+    def list_tv_shows_on_target():
         return os.listdir(TvMover.tgt_path)
 
     @staticmethod
@@ -332,7 +332,7 @@ class TvMover(FileMover):
             thread.start()
 
         try:
-            for idx, (old_path, new_path) in enumerate(changes):
+            for idx, (old_path, new_path) in enumerate(changes[::-1]):
                 queue.put(((idx + 1) * -1, old_path, new_path))
 
             queue.join()
@@ -359,6 +359,11 @@ class TvMover(FileMover):
                 current_path = root + '/' + file
                 stg_path_with_tgt_path = (TvMover.stg_path, TvMover.tgt_path)
                 new_path = current_path.replace(*stg_path_with_tgt_path)
+
+                Output.log.message(f'[FINISH] {file}',
+                                   f'|- stg: {current_path}',
+                                   f'|- tgt: {new_path}\n')
+
                 os.rename(current_path, new_path)
 
     @staticmethod
@@ -366,6 +371,8 @@ class TvMover(FileMover):
         errors = []
 
         queue = q.PriorityQueue(len(changes))
+
+        Output.log.message(f'{len(changes)} episodes found')
 
         def move_files_thread():
             while True:
@@ -387,10 +394,16 @@ class TvMover(FileMover):
                     file_name = new_path.split("/")[-1]
                     old_name = old_path.split("/")[-1]
 
-                    Output.log.message(f'[MOVE] {file_name} ({old_name})')
+                    old_path = os.path.normpath(old_path)
+                    new_path = os.path.normpath(new_path)
+
+                    Output.log.message(f'[STAGE] {file_name} ({old_name})',
+                                       f'|- src: {old_path}',
+                                       f'|- tgt: {new_path}')
+
                     TvMover.move(old_path, new_path)
                     Output.log.message(f'[DONE] {file_name}')
-                
+
                 except KeyboardInterrupt:
                     raise
 

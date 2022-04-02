@@ -1,9 +1,10 @@
 
+
 import re
 import threading as thr
-import datetime as dt
 
 from typing import Optional
+from rich.console import Console
 
 
 class Constants:
@@ -54,73 +55,25 @@ class Constants:
 class Log:
     '''A thread-safe class for logging info to stdout or a specified file'''
 
-    def __init__(self, stdout=True, path=None, divider='=', pad='-', width=80):
-
-        if not stdout and path is None:
-            print('[-]: a path is required when stdout is False')
-            stdout = True
-
-        if stdout and path is None:
-            # only write to stdout
-            def _print_wrapper(*values, **kwargs):
-                print(*values, **kwargs)
-
-        elif stdout and path is not None:
-            # write to log and stdout
-            def _print_wrapper(*values, **kwargs):
-                with open(path, 'a') as log_file:
-                    print(*values, **kwargs, file=log_file)
-                print(*values, **kwargs)
-
-        else:
-            # only write to log
-            def _print_wrapper(*values, **kwargs):
-                with open(path, 'a') as log_file:
-                    print(*values, **kwargs, file=log_file)
-
-        self._write_func = _print_wrapper
-
-        self._is_enabled = True
+    def __init__(self):
+        self._console = Console()
         self._print_lock = thr.Lock()
-        self._divider = divider
-        self._pad = pad
-        self._width = width
 
-    def message(self, text):
-        lines = text.split('\n')
-
-        if self._is_enabled:
-            with self._print_lock:
-                for text in lines:
-                    text = (text[:self._width - 3] + '...'
-                            if len(text) > self._width
-                            else text)
-                    self._write_func(f'[{dt.datetime.now()}]: {text}')
-
-    def submessage(self, text, header=''):
-        if header != '':
-            header = f'[{header}]'
-
-        self.message(f'|- {header} {text}')
-
-    def disable(self):
-        self._is_enabled = False
+    def message(self, *text):
+        with self._print_lock:
+            for item in text:
+                lines = item.split('\n')
+                self._console.print(*lines)
 
     def header(self, header_text: str):
-        header_text = header_text.upper().replace('_', ' ')
-
-        header_text = header_text.center(self._width, self._pad)
-
-        self.message(self._divider * self._width)
-        self.message(header_text)
-        self.message(self._divider * self._width)
+        self._console.rule(header_text)
 
     def divider(self):
-        self.message(self._divider * self._width)
+        self._console.rule()
 
 
 class Output:
-    log = Log(path=Constants.LOG_FILE)
+    log = Log()
 
 
 class FileMover:
@@ -204,9 +157,12 @@ class NameCleaner:
 
     @staticmethod
     def name_special_file(episode_file_name: str) -> str:
+        split_name = episode_file_name.split('.')
+        extension = split_name[-1]
+        file_name = '.'.join(split_name[:-1])
         all_symbols = r'[ \-\[\]+=,./;:\'`~!@#$%^&*]'
-        new_name = re.sub(all_symbols, '_', episode_file_name)
-        new_name = re.sub(r'_+', '_', new_name).lower()
+        new_name = re.sub(all_symbols, '_', file_name)
+        new_name = re.sub(r'_+', '_', new_name).lower() + '.' + extension
         return new_name
 
     @staticmethod

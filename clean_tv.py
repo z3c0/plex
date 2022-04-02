@@ -8,14 +8,14 @@ def main():
 
 def clean_existing_tv_files():
     # retroactively cleans existing files on target file system
-    tv_shows = TvMover.list_files_on_target()
+    tv_shows = TvMover.list_tv_shows_on_target()
 
     for tv_show in tv_shows:
         TvMover.clean_tv_show(tv_show, TvMover.tgt_path)
 
 
 def move_tv_files():
-    tv_shows = TvMover.list_files_on_source()
+    tv_shows = TvMover.list_tv_shows_on_source()
 
     for tv_show in tv_shows:
         changes, specials = TvMover.clean_tv_show(tv_show)
