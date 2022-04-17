@@ -8,9 +8,8 @@ from rich.console import Console
 
 
 class Constants:
-    LOG_FILE = 'plex.log'
-
-    THREAD_COUNT = 8
+    LOG_FILE = 'media.log'
+    CFG_FILE = 'media.cfg'
 
     PREFERRED_VIDEO_EXTENSIONS = {'mkv', 'mp4'}
 
@@ -53,23 +52,31 @@ class Constants:
 
 
 class Log:
-    '''A thread-safe class for logging info to stdout or a specified file'''
+    """A thread-safe class for logging info to stdout or a specified file"""
 
     def __init__(self):
-        self._console = Console()
+        self._console = Console(log_path=False)
+        self._log_file = Console(file=open(Constants.LOG_FILE, 'a'),
+                                 log_path=False)
+
         self._print_lock = thr.Lock()
 
     def message(self, *text):
         with self._print_lock:
             for item in text:
                 lines = item.split('\n')
-                self._console.print(*lines)
+                self._console.log(*lines)
+                self._log_file.log(*lines)
 
     def header(self, header_text: str):
-        self._console.rule(header_text)
+        with self._print_lock:
+            self._console.rule(header_text)
+            self._log_file.rule(header_text)
 
     def divider(self):
-        self._console.rule()
+        with self._print_lock:
+            self._console.rule()
+            self._log_file.rule()
 
 
 class Output:

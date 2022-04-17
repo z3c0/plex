@@ -1,4 +1,4 @@
-"""module for preparing movie files for Plex"""
+"""module for moving movie files for a media server"""
 
 from mediamanager import MovieMover
 
@@ -10,4 +10,3 @@ if __name__ == '__main__':
     videos, subtitles = MovieMover.search(all_files)
     name_changes = MovieMover.process_new_titles(videos, subtitles)
     MovieMover.move_files(name_changes)
-    MovieMover.move_files_to_target()

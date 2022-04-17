@@ -1,15 +1,14 @@
 import os
 import re
-import queue as q
-import threading as thr
 import shutil as sh
 import configparser as cfg
+import concurrent.futures
 
 from mediamanager.subcomponents import (Output, FileMover,
                                         Constants, NameCleaner)
 
 config = cfg.ConfigParser()
-config.read('plex.cfg')
+config.read('media.cfg')
 
 
 class MovieMover(FileMover):
@@ -44,35 +43,40 @@ class MovieMover(FileMover):
         return all_files
 
     @staticmethod
-    def run_threads(queue, changes, func):
-        for _ in range(Constants.THREAD_COUNT):
-            thread = thr.Thread(target=func, daemon=True)
-            thread.start()
+    def run_threads(changes):
+        def move_files_thread(old_path, new_path):
+            file_name = new_path.split("/")[-1]
+            old_name = old_path.split("/")[-1]
 
-        try:
-            for idx, (old_path, new_path) in enumerate(changes):
-                queue.put(((idx + 1) * -1, old_path, new_path))
+            Output.log.message(f'[MOVE] {file_name} ({old_name})')
+            MovieMover.move(old_path, new_path)
+            Output.log.message(f'[DONE] {file_name}')
 
-            queue.join()
-        except KeyboardInterrupt:
-            raise
-        except Exception as e:
-            Output.log.message(e)
+            return new_path
 
-            MovieMover.remove_files((tgt for _, tgt in changes))
+        results = list()
 
-        finally:
-            for _ in range(Constants.THREAD_COUNT):
-                queue.put((0, None, None))
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            file_move_futures = (executor.submit(move_files_thread, old, new)
+                                 for old, new in changes)
 
-            while not queue.empty():
-                _ = queue.get_nowait()
+            for future in concurrent.futures.as_completed(file_move_futures):
+                try:
+                    result = future.result()
+                    results.append(result)
+                except KeyboardInterrupt:
+                    raise
+                except Exception as e:
+                    Output.log.message(e)
+                    MovieMover.remove_files((tgt for _, tgt in changes))
+
+        return results
 
     @staticmethod
     def process_manifest(changes: list) -> list:
         manifest = list()
 
-        Output.log.header('processing duplicates')
+        Output.log.header('processing manifest')
 
         for old_path, new_name in changes:
             new_path = MovieMover.stg_path + '/' + new_name
@@ -85,72 +89,79 @@ class MovieMover(FileMover):
 
             manifest.append((old_path, new_path))
 
-        if len(manifest):
+        if len(manifest) == 0:
+            Output.log.header('no changes found')
+            return None
+        else:
             Output.log.header('deployment manifest')
             for idx, (_, new_path) in enumerate(manifest):
                 Output.log.message(f'[{str(idx).zfill(2)}] {new_path}')
             Output.log.divider()
-        else:
-            Output.log.header('no changes')
 
         return manifest
 
     @staticmethod
     def move_files_to_target():
+        results = list()
         for root, _, files in os.walk(MovieMover.stg_path):
             root = root.replace('\\', '/')
             for file in files:
                 current_path = root + '/' + file
                 stg_path_with_tgt = (MovieMover.stg_path, MovieMover.tgt_path)
                 new_path = current_path.replace(*stg_path_with_tgt)
-                os.rename(current_path, new_path)
 
+                try:
+                    os.rename(current_path, new_path)
+                    results.append(new_path)
+                except PermissionError:
+                    continue
+
+        return results
+
+    @staticmethod
+    def clear_stage():
         sh.rmtree(MovieMover.stg_path)
         os.mkdir(MovieMover.stg_path)
 
     @staticmethod
     def move_files(changes: list):
-        '''
+        """
             changes is a list of 2-tuples
             changes[n][0] contains the path of the file to be moved
             changes[n][1] contains the desired name of the file
-        '''
+        """
         changes = sorted(changes, key=lambda n: n[1])
 
         manifest = MovieMover.process_manifest(changes)
+        if manifest is None:
+            return
 
-        queue = q.PriorityQueue(Constants.THREAD_COUNT)
-        errors = []
+        Output.log.message(f'{len(manifest)} movies found')
 
-        def move_files_thread():
-            while True:
-                priority_id, old_path, new_path = queue.get()
+        stage_results = MovieMover.run_threads(manifest)
+        Output.log.message(f'{len(stage_results)} movies moved to stage')
 
-                if priority_id == 0:
-                    queue.task_done()
-                    break
+        target_results = MovieMover.move_files_to_target()
+        Output.log.message(f'{len(target_results)} movies moved to target')
 
-                try:
-                    file_name = new_path.split("/")[-1]
-                    old_name = old_path.split("/")[-1]
+        if len(stage_results) == len(target_results):
+            MovieMover.clear_stage()
+            Output.log.header('deployment complete')
 
-                    Output.log.message(f'[MOVE] {file_name} ({old_name})')
-                    MovieMover.move(old_path, new_path)
-                    Output.log.message(f'[DONE] {file_name}')
+        elif len(stage_results) > len(target_results):
+            missed_files = set(stage_results) | set(target_results)
+            error_count = len(missed_files)
+            Output.log.message(f'deployment failed for {error_count} files')
+            for idx, file in enumerate(missed_files):
+                Output.log.message(f'[{str(idx).zfill(2)}]: {file}')
 
-                except KeyboardInterrupt:
-                    raise
-
-                except Exception as e:
-                    Output.log.message(str(e))
-                    errors.append((old_path, new_path))
-                    raise
-                finally:
-                    queue.task_done()
-
-        MovieMover.run_threads(queue, manifest, move_files_thread)
-
-        Output.log.header('deployment complete')
+        else:
+            # not expected to ever run, but just in case
+            extra_files = set(target_results) | set(stage_results)
+            extra_count = len(extra_files)
+            Output.log.message(f'deployment complete (w/{extra_count} extras)')
+            for idx, file in enumerate(extra_files):
+                Output.log.message(f'[{str(idx).zfill(2)}]: {file}')
 
     @staticmethod
     def search(all_files: list, preferred_only=False) -> list:
@@ -313,9 +324,10 @@ class TvMover(FileMover):
 
     @staticmethod
     def set_file_operation(path):
-        TvMover.move = \
-            (os.rename if TvMover.tgt_path == os.path.normpath(path)
-             else sh.copyfile)
+        if TvMover.tgt_path == os.path.normpath(path):
+            TvMover.move = os.rename
+        else:
+            TvMover.move = sh.copyfile
 
     @staticmethod
     def remove_files(paths):
@@ -326,30 +338,69 @@ class TvMover(FileMover):
                 continue
 
     @staticmethod
-    def run_threads(queue, changes, func):
-        for _ in range(Constants.THREAD_COUNT):
-            thread = thr.Thread(target=func, daemon=True)
-            thread.start()
+    def move_tv_shows(tv_shows: list):
+        for tv_show in tv_shows:
+            changes, specials = TvMover.clean_tv_show(tv_show)
 
-        try:
-            for idx, (old_path, new_path) in enumerate(changes[::-1]):
-                queue.put(((idx + 1) * -1, old_path, new_path))
+            if len(changes) > 0:
+                TvMover.move_files_to_stage(changes)
 
-            queue.join()
-        except KeyboardInterrupt:
-            raise
-        except Exception as e:
-            Output.log.message(str(e))
-            TvMover.remove_files((tgt for _, tgt in changes))
+            if len(specials) > 0:
+                TvMover.create_specials_folder(tv_show)
+                TvMover.move_specials(specials)
 
-        finally:
-            Output.log.message('sending close signal to threads')
-            for _ in range(Constants.THREAD_COUNT):
-                queue.put((0, None, None))
+            TvMover.move_files_to_target()
+            TvMover.clear_stage(tv_show)
 
-            Output.log.message('waiting for threads to close')
-            while not queue.empty():
-                _ = queue.get_nowait()
+    @staticmethod
+    def run_threads(changes):
+        def move_files_thread(old_path, new_path):
+            target_path = new_path.replace(TvMover.stg_path, TvMover.tgt_path)
+
+            if not TvMover.overwrite and os.path.isfile(target_path):
+                Output.log.message(f'[SKIP] {new_path.split("/")[-1]}')
+                return None
+
+            file_name = new_path.split("/")[-1]
+
+            old_path = os.path.normpath(old_path)
+            new_path = os.path.normpath(new_path)
+
+            Output.log.message(f'[STAGE] {file_name}',
+                               f'|- src: {old_path}',
+                               f'|- tgt: {new_path}')
+
+            TvMover.move(old_path, new_path)
+            Output.log.message(f'[DONE] {file_name}')
+
+            return new_path
+
+        results = list()
+
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            file_move_futures = (executor.submit(move_files_thread, old, new)
+                                 for old, new in changes)
+
+            for future in concurrent.futures.as_completed(file_move_futures):
+                try:
+                    result = future.result()
+
+                    if result is None:
+                        continue
+
+                    results.append(result)
+
+                    if len(results) % 5 == 0:
+                        Output.log.message('checkpoint reached')
+                        TvMover.move_files_to_target()
+
+                except KeyboardInterrupt:
+                    raise
+                except Exception as e:
+                    Output.log.message(e)
+                    TvMover.remove_files((tgt for _, tgt in changes))
+
+        return results
 
     @staticmethod
     def move_files_to_target():
@@ -368,55 +419,11 @@ class TvMover(FileMover):
 
     @staticmethod
     def move_files_to_stage(changes):
-        errors = []
-
-        queue = q.PriorityQueue(len(changes))
-
         Output.log.message(f'{len(changes)} episodes found')
+        results = TvMover.run_threads(changes)
 
-        def move_files_thread():
-            while True:
-                priority_id, old_path, new_path = queue.get()
-
-                if priority_id == 0:
-                    queue.task_done()
-                    break
-
-                target_path = \
-                    new_path.replace(TvMover.stg_path, TvMover.tgt_path)
-
-                if not TvMover.overwrite and os.path.isfile(target_path):
-                    Output.log.message(f'[SKIP] {new_path.split("/")[-1]}')
-                    queue.task_done()
-                    continue
-
-                try:
-                    file_name = new_path.split("/")[-1]
-                    old_name = old_path.split("/")[-1]
-
-                    old_path = os.path.normpath(old_path)
-                    new_path = os.path.normpath(new_path)
-
-                    Output.log.message(f'[STAGE] {file_name} ({old_name})',
-                                       f'|- src: {old_path}',
-                                       f'|- tgt: {new_path}')
-
-                    TvMover.move(old_path, new_path)
-                    Output.log.message(f'[DONE] {file_name}')
-
-                except KeyboardInterrupt:
-                    raise
-
-                except Exception as e:
-                    Output.log.message(str(e))
-                    errors.append((old_path, new_path))
-                finally:
-                    queue.task_done()
-
-        TvMover.run_threads(queue, changes, move_files_thread)
-
-        # clean-up half-processed files for re-attempting
-        TvMover.remove_files((tgt for _, tgt in errors))
+        if len(results) > 0:
+            Output.log.message(f'{len(results)} episodes moved to stage')
 
     @staticmethod
     def move_specials(odd_names):
@@ -460,15 +467,19 @@ class TvMover(FileMover):
             if episode[0] == '.' or not re.match(r's\d+', season):
                 continue
 
+            # attempt to find the season number from the episode file.
+            # if not found persist with the number found from the season folder
             season_num = NameCleaner.get_season_num_from_episode(episode)
-            season = (season_num if season_num and season_num != season
-                      else season)
+            if season_num is not None and season_num != season:
+                season = season_num
 
+            # create a folder for the season on the stage and the target
             TvMover.allocate_space_for_season(tv_show_name, season)
 
             episode_match = re.search(Constants.Tv.EPISODE_REGEX, episode)
             episode_ext_match = re.search(r'^.+\.([a-z0-9]{2,4})$', episode)
 
+            # if no extension can be determined, move on
             if not episode_ext_match:
                 continue
 
@@ -478,9 +489,11 @@ class TvMover(FileMover):
                                 .union(Constants.OTHER_VIDEO_EXTENSIONS)
                                 .union(Constants.SUBTITLE_EXTENSIONS))
 
+            # if an extension is found, but is not a valid extension, move on
             if episode_ext not in valid_extensions:
                 continue
 
+            # if no episode number can be found, move it to s00
             if not episode_match:
                 new_name = NameCleaner.name_special_file(episode)
 
@@ -490,6 +503,8 @@ class TvMover(FileMover):
                 odd_names.append((old_path, new_path))
                 continue
 
+            # if an episode number was found, finalize the name changes to
+            # {stage directory}/{tv show name}/sXX/sXXeXX.{extension}"
             episode = NameCleaner.parse_episode_match(episode_match, season)
 
             new_path = (f'{TvMover.stg_path}/{tv_show_name}/{season}/'
