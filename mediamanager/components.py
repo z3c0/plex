@@ -82,16 +82,14 @@ class MovieMover(FileMover):
             new_path = MovieMover.stg_path + '/' + new_name
             target_path = MovieMover.tgt_path + '/' + new_name
 
-            # if file exists on target or was already staged
+            # if file exists on target or was already staged, skip it
             if os.path.isfile(target_path) or os.path.isfile(new_path):
-                Output.log.message(f'[SKIP] {new_name}')
                 continue
 
             manifest.append((old_path, new_path))
 
         if len(manifest) == 0:
             Output.log.header('no changes found')
-            return None
         else:
             Output.log.header('deployment manifest')
             for idx, (_, new_path) in enumerate(manifest):
@@ -133,7 +131,8 @@ class MovieMover(FileMover):
         changes = sorted(changes, key=lambda n: n[1])
 
         manifest = MovieMover.process_manifest(changes)
-        if manifest is None:
+        if len(manifest) == 0:
+            Output.log.message('no changes found')
             return
 
         Output.log.message(f'{len(manifest)} movies found')
@@ -340,10 +339,15 @@ class TvMover(FileMover):
     @staticmethod
     def move_tv_shows(tv_shows: list):
         for tv_show in tv_shows:
-            changes, specials = TvMover.clean_tv_show(tv_show)
+            episodes, specials = TvMover.clean_tv_show(tv_show)
 
-            if len(changes) > 0:
-                TvMover.move_files_to_stage(changes)
+            if len(episodes) == 0 and len(specials) == 0:
+                continue
+
+            Output.log.header(tv_show)
+
+            if len(episodes) > 0:
+                TvMover.move_files_to_stage(episodes)
 
             if len(specials) > 0:
                 TvMover.create_specials_folder(tv_show)
@@ -357,8 +361,8 @@ class TvMover(FileMover):
         def move_files_thread(old_path, new_path):
             target_path = new_path.replace(TvMover.stg_path, TvMover.tgt_path)
 
+            # if file exists on target and overwriting is disabled, skip it
             if not TvMover.overwrite and os.path.isfile(target_path):
-                Output.log.message(f'[SKIP] {new_path.split("/")[-1]}')
                 return None
 
             file_name = new_path.split("/")[-1]
@@ -424,6 +428,8 @@ class TvMover(FileMover):
 
         if len(results) > 0:
             Output.log.message(f'{len(results)} episodes moved to stage')
+        else:
+            Output.log.message('no changes')
 
     @staticmethod
     def move_specials(odd_names):
@@ -456,9 +462,6 @@ class TvMover(FileMover):
 
         changes = []
         odd_names = []
-
-        if len(tv_show):
-            Output.log.header(tv_show_name)
 
         for root, season, episode in tv_show:
             old_episode_name = episode
